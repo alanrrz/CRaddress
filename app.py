@@ -13,7 +13,7 @@ import json
 # This is your correct Supabase bucket URL
 SUPABASE_BASE_URL = "https://wrvonobxqimskkiajkft.supabase.co/storage/v1/object/public/data-splits/"
 
-# --- CRITICAL COLUMNS - These should match your new 'schools.csv' ---
+# --- CRITICAL COLUMNS - These match your 'schools.csv' ---
 
 # 1. In your 'schools.csv' file:
 #    The column with the unique school ID
@@ -45,7 +45,7 @@ def load_main_files():
         manifest_url = f"{SUPABASE_BASE_URL}_manifest.csv"
         manifest = pd.read_csv(manifest_url)
         
-        # ✅ This is now pointing to your new, correct schools file
+        # This points to your correct, joined schools file
         schools_url = f"{SUPABASE_BASE_URL}schools.csv" 
         schools = pd.read_csv(schools_url)
         
@@ -139,76 +139,4 @@ def parse_address_expanded(line):
 
 # --- Main App ---
 st.set_page_config(page_title="School Address Finder", layout="wide")
-st.title("📍 School Community Address Finder")
-
-# 1. Load the manifest and school list
-try:
-    manifest, schools = load_main_files()
-except Exception as e:
-    st.stop()
-
-# 2. Merge data
-#    This JOINS your 'schools.csv' with the 'manifest.csv'
-#    It assumes 'boundary_id' from the manifest (which is EKEY_5)
-#    matches the SCHOOLS_ID_COLUMN (EKEY_5) in 'schools.csv'
-try:
-    # Convert join keys to strings to handle any number/text mismatches
-    manifest['join_key'] = manifest['boundary_id'].astype(str)
-    schools['join_key'] = schools[SCHOOLS_ID_COLUMN].astype(str)
-    
-    school_data_merged = pd.merge(
-        schools, 
-        manifest, 
-        on="join_key",
-        how="left"
-    )
-    
-    if school_data_merged['file_paths_json'].isnull().all():
-        st.error("Data Merge Failed: No schools in 'schools.csv' matched a boundary in '_manifest.csv'.")
-        st.error(f"Check that the column '{SCHOOLS_ID_COLUMN}' in schools.csv matches the 'EKEY_5' IDs from your shapefile.")
-        st.stop()
-        
-except Exception as e:
-    st.error(f"Fatal Error: Could not merge 'schools.csv' and '_manifest.csv'.")
-    st.error(f"Check your CONFIG variables. We tried to join on 'schools.csv' column '{SCHOOLS_ID_COLUMN}' and the manifest's 'boundary_id'.")
-    st.error(f"Details: {e}")
-    st.stop()
-
-
-# 3. Create the school selector
-school_list = school_data_merged[SCHOOLS_LABEL_COLUMN].sort_values().tolist()
-site_selected = st.selectbox("Select a School Campus", school_list)
-
-result_container = st.container()
-
-if site_selected:
-    # 4. Get selected school's info
-    selected_school = school_data_merged[school_data_merged[SCHOOLS_LABEL_COLUMN] == site_selected].iloc[0]
-    
-    slon = selected_school[SCHOOLS_LON_COLUMN]
-    slat = selected_school[SCHOOLS_LAT_COLUMN]
-    file_paths_json = selected_school["file_paths_json"]
-
-    # 5. Load the address data for *only this school*
-    with st.spinner(f"Loading address data for {site_selected}..."):
-        addresses_df = load_address_data(file_paths_json)
-    
-    if addresses_df.empty:
-        st.error(f"No address data found for {site_selected}.")
-        st.stop()
-    
-    # Data check
-    if ADDRESS_LAT_COLUMN not in addresses_df.columns or ADDRESS_LON_COLUMN not in addresses_df.columns:
-        st.error(f"Parquet files are missing required columns! We need '{ADDRESS_LAT_COLUMN}' and '{ADDRESS_LON_COLUMN}'.")
-        st.error(f"Available columns: {', '.join(addresses_df.columns)}")
-        st.stop()
-    
-    # Drop rows with missing geo-data
-    addresses_df = addresses_df.dropna(subset=[ADDRESS_LAT_COLUMN, ADDRESS_LON_COLUMN])
-
-
-    st.info(f"Loaded {len(addresses_df):,} addresses for this school's boundary. Now, draw your target area.")
-
-    # 6. Create the map, auto-zoomed to the school
-    fmap = folium.Map(location=[slat, slon], zoom_start=16)
-    folium.Marker([slat, slon], tooltip=site_selected, icon=folium.Icon(color="blue")).add_to(fmap)
+st
