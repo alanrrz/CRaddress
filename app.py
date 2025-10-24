@@ -152,6 +152,7 @@ except Exception as e:
 #    It assumes 'boundary_id' from the manifest (which is EKEY_5)
 #    matches the SCHOOLS_ID_COLUMN (EKEY_5) in 'schools.csv'
 try:
+    # Convert join keys to strings to handle any number/text mismatches
     manifest['join_key'] = manifest['boundary_id'].astype(str)
     schools['join_key'] = schools[SCHOOLS_ID_COLUMN].astype(str)
     
@@ -211,84 +212,3 @@ if site_selected:
     # 6. Create the map, auto-zoomed to the school
     fmap = folium.Map(location=[slat, slon], zoom_start=16)
     folium.Marker([slat, slon], tooltip=site_selected, icon=folium.Icon(color="blue")).add_to(fmap)
-
-    draw = Draw(
-        export=True,
-        position='topleft',
-        draw_options={
-            'polyline': False, 'rectangle': True, 'circle': False, 
-            'polygon': True, 'marker': False, 'circlemarker': False,
-        },
-        edit_options={'edit': True, 'remove': True}
-    )
-    draw.add_to(fmap)
-    fmap.add_child(MeasureControl(primary_length_unit='miles'))
-
-    # 7. Display the map
-    map_data = st_folium(fmap, width="100%", height=500)
-
-    # 8. Get drawn shapes
-    features = []
-    if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
-        features = map_data["all_drawings"]
-    
-    if not features:
-        st.info("Tip: Use the tools on the left of the map to draw one or more shapes.")
-        st.stop()
-
-    # 9. Filter Logic
-    with result_container:
-        st.write("---")
-        st.subheader("Filtered & Parsed Addresses")
-        
-        try:
-            # Convert all drawn shapes into Shapely objects
-            polygons = [shape(feature["geometry"]) for feature in features]
-            
-            if not polygons:
-                st.warning("Please draw at least one shape to filter addresses.")
-                st.stop()
-
-            # Create Shapely Points from the address LAT/LON columns
-            points = [Point(lon, lat) for lon, lat in zip(addresses_df[ADDRESS_LON_COLUMN], addresses_df[ADDRESS_LAT_COLUMN])]
-            
-            # Create a new GeoDataFrame for efficient spatial filtering
-            gpd_addresses = gpd.GeoDataFrame(addresses_df, geometry=points)
-
-            # Find all points that fall inside *any* of the drawn polygons
-            filtered_mask = gpd_addresses.geometry.apply(lambda point: any(poly.contains(point) for poly in polygons))
-            filtered_df = addresses_df[filtered_mask]
-
-        except Exception as e:
-            st.error(f"Could not filter addresses. Error: {e}")
-            st.stop()
-
-        if filtered_df.empty:
-            st.info("No addresses found within the drawn area(s). Try drawing a different shape.")
-        else:
-            # 10. Parse the filtered addresses
-            all_rows = []
-            
-            if ADDRESS_FULL_COLUMN not in filtered_df.columns:
-                st.error(f"Error: The address column '{ADDRESS_FULL_COLUMN}' was not found in your Parquet files.")
-                st.error(f"Available columns: {', '.join(filtered_df.columns)}")
-                st.stop()
-
-            for addr in filtered_df[ADDRESS_FULL_COLUMN].tolist():
-                all_rows.extend(parse_address_expanded(addr))
-
-            parsed_df = pd.DataFrame(all_rows)
-
-            st.markdown(f"**Found {len(parsed_df)} mailable addresses.**")
-            st.dataframe(parsed_df.head())
-
-            csv = parsed_df.to_csv(index=False).encode("utf-8")
-
-            st.download_button(
-                label=f"Download {len(parsed_df)} Parsed Addresses",
-                data=csv,
-                file_name=f"{site_selected.replace(' ', '_')}_parsed_addresses.csv",
-                mime='text/csv'
-            )
-            
-            st.info("To get contact info (phones/emails), upload this CSV to the **Contact Enricher** app.")
