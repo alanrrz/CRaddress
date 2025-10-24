@@ -229,4 +229,4 @@ if site_selected:
 
     # 8. Get drawn shapes
     features = []
-if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
+    if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
