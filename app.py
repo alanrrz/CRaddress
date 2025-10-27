@@ -79,7 +79,7 @@ uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
 # --- 2. Check for API Key in Streamlit Secrets ---
 try:
     # This will load the API key you add to the Streamlit Cloud dashboard
-    API_KEY = st.secrets["tMoYpcRYbT1nKKAd7EzSI8FwydV9ihVq5blfVl4R"]
+    API_KEY = st.secrets["EKATA_API_KEY"]
 except KeyError:
     st.error("API Key not found. Please add your EKATA_API_KEY to the Streamlit Cloud secrets.")
     st.stop() # Stop the app if the key is missing
