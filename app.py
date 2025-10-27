@@ -1,142 +1,152 @@
 import streamlit as st
 import pandas as pd
-import geopandas as gpd
-import folium
-from folium.plugins import Draw, MeasureControl
-from streamlit_folium import st_folium
-from shapely.geometry import Point, shape
-import usaddress
-import json
+import requests
+import time
 
-# --- ⚠️ CONFIGURATION - ALL VALUES ARE FILLED IN ---
-
-# This is your correct Supabase bucket URL
-SUPABASE_BASE_URL = "https://wrvonobxqimskkiajkft.supabase.co/storage/v1/object/public/data-splits/"
-
-# --- CRITICAL COLUMNS - These match your 'schools.csv' ---
-
-# 1. In your 'schools.csv' file:
-#    The column with the unique school ID
-SCHOOLS_ID_COLUMN = "EKEY_5" 
-#    The column with the friendly school name to display
-SCHOOLS_LABEL_COLUMN = "LABEL" 
-#    The column with the school's latitude
-SCHOOLS_LAT_COLUMN = "LAT"
-#    The column with the school's longitude
-SCHOOLS_LON_COLUMN = "LON"
-
-# 2. In your Parquet files (from CAMS):
-#    The column with the address latitude
-ADDRESS_LAT_COLUMN = "LAT"
-#    The column with the address longitude
-ADDRESS_LON_COLUMN = "LON"
-#    The column with the full street address for parsing
-ADDRESS_FULL_COLUMN = "FullAddress"
-
-# --- END CONFIG ---
-
-
-# --- Caching Functions (to load data) ---
-
-@st.cache_data
-def load_main_files():
-    """Loads the manifest and school list from Supabase."""
-    try:
-        manifest_url = f"{SUPABASE_BASE_URL}_manifest.csv"
-        manifest = pd.read_csv(manifest_url)
-        
-        # This points to your correct, joined schools file
-        schools_url = f"{SUPABASE_BASE_URL}schools.csv" 
-        schools = pd.read_csv(schools_url)
-        
-        return manifest, schools
-    except Exception as e:
-        st.error(f"Fatal Error: Could not load '_manifest.csv' or 'schools.csv' from Supabase.")
-        st.error(f"Details: {e}")
-        st.error("Solution: Make sure you uploaded both '_manifest.csv' AND 'schools.csv' to the 'data-splits' bucket.")
-        st.stop()
-
-@st.cache_data
-def load_address_data(file_paths_json):
+# --- Helper Function to Call the API (UPDATED FOR SECRETS) ---
+def fetch_whitepages_data(api_key, street, city, state, zip_code):
     """
-    Given a JSON string of file paths, downloads them from Supabase
-    and combines them into one DataFrame.
+    Fetches data from the Ekata (formerly Whitepages Pro) Identity Check API.
     """
-    file_urls = [f"{SUPABASE_BASE_URL}{path}" for path in json.loads(file_paths_json)]
+    API_ENDPOINT = "https://api.ekata.com/1.0/identity_check"
     
-    if not file_urls:
-        return pd.DataFrame()
+    params = {
+        "primary.address.street_line_1": street,
+        "primary.address.city": city,
+        "primary.address.state_code": state,
+        "primary.address.postal_code": zip_code,
+        "primary.address.country_code": "US"
+    }
+    
+    # Use the API key (passed from st.secrets) for authentication
+    auth = (api_key, '') 
 
-    df_list = []
-    for url in file_urls:
-        try:
-            # We only read the columns we absolutely need to keep memory low
-            df_list.append(pd.read_parquet(url, columns=[ADDRESS_LAT_COLUMN, ADDRESS_LON_COLUMN, ADDRESS_FULL_COLUMN]))
-        except Exception as e:
-            st.warning(f"Could not load data shard: {url}. Error: {e}")
-            
-    if not df_list:
-        return pd.DataFrame()
-        
-    return pd.concat(df_list, ignore_index=True)
-
-# --- Address Parsing Function (from your original code) ---
-
-def parse_address_expanded(line):
-    # Added a check for non-string (e.g., None or nan) values
-    if not isinstance(line, str):
-        return []
     try:
-        parsed, _ = usaddress.tag(line)
-        house_num = parsed.get("AddressNumber", "")
-        street = " ".join([
-            parsed.get("StreetNamePreDirectional", ""),
-            parsed.get("StreetName", ""),
-            parsed.get("StreetNamePostType", ""),
-            parsed.get("StreetNamePostDirectional", ""),
-        ]).strip()
-        full_address = f"{house_num} {street}".strip()
-        unit = parsed.get("OccupancyIdentifier", "")
-        city = parsed.get("PlaceName", "")
-        state = parsed.get("StateName", "")
-        zip_code = parsed.get("ZipCode", "")
+        response = requests.get(API_ENDPOINT, params=params, auth=auth)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # --- Safely parse the JSON response ---
+            person = data.get('primary_belongs_to', [{}])[0]
+            if not person: person = {}
+            
+            phone_data = data.get('phones', [{}])[0]
+            if not phone_data: phone_data = {}
 
-        rows = []
-        # expand unit if it's a range
-        if unit and "-" in unit:
-            parts = unit.replace("–", "-").split("-")
-            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                start = int(parts[0])
-                end = int(parts[1])
-                for u in range(start, end + 1):
-                    rows.append({
-                        "Address": full_address,
-                        "Unit": str(u),
-                        "City": city,
-                        "State": state,
-                        "ZIP": zip_code,
-                        "Original": line
-                    })
-                return rows
-        # fallback — single row
-        return [{
-            "Address": full_address,
-            "Unit": unit,
-            "City": city,
-            "State": state,
-            "ZIP": zip_code,
-            "Original": line
-        }]
-    except usaddress.RepeatedLabelError:
-        return [{
-            "Address": "",
-            "Unit": "",
-            "City": "",
-            "State": "",
-            "ZIP": "",
-            "Original": line
-        }]
+            email_data = data.get('emails', [{}])[0]
+            if not email_data: email_data = {}
+            
+            # --- Extract data ---
+            name = person.get('name', 'Not Found')
+            phone = phone_data.get('phone_number', 'Not Found')
+            email = email_data.get('email_address', 'Not Found')
+            
+            return name, phone, email, "Success"
+            
+        else:
+            # Show a user-friendly error in the app
+            st.error(f"API Error (Row: {street}): {response.status_code} - {response.json().get('error', {}).get('message', 'Unknown Error')}")
+            return "Error", "Error", "Error", response.json().get('error', {}).get('message', 'API Error')
 
-# --- Main App ---
-st.set_page_config(page_title="School Address Finder", layout="wide")
-st
+    except Exception as e:
+        st.exception(e)
+        return "Exception", "Exception", "Exception", str(e)
+
+# --- Streamlit App UI (UPDATED FOR SECRETS) ---
+
+st.set_page_config(layout="wide")
+st.title("Address Enrichment Tool (Ekata API)")
+
+st.info("Upload a CSV to enrich it with names, phones, and emails. \n\n**Your CSV must have separate columns for street, city, state, and zip.**")
+
+# --- 1. Get Column Names (API Key is now hidden) ---
+st.subheader("CSV Column Configuration")
+st.warning("Enter the *exact* column names from your CSV file.")
+
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    street_col = st.text_input("Street Address Column", "street")
+with col2:
+    city_col = st.text_input("City Column", "city")
+with col3:
+    state_col = st.text_input("State Column (2-letter)", "state")
+with col4:
+    zip_col = st.text_input("Zip Code Column", "zip")
+
+uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
+
+# --- 2. Check for API Key in Streamlit Secrets ---
+try:
+    # This will load the API key you add to the Streamlit Cloud dashboard
+    API_KEY = st.secrets["EKATA_API_KEY"]
+except KeyError:
+    st.error("API Key not found. Please add your EKATA_API_KEY to the Streamlit Cloud secrets.")
+    st.stop() # Stop the app if the key is missing
+
+# --- 3. Run the App ---
+if uploaded_file is not None and all([street_col, city_col, state_col, zip_col]):
+    
+    try:
+        df = pd.read_csv(uploaded_file)
+        required_cols = [street_col, city_col, state_col, zip_col]
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            st.error(f"Error: The following columns were not found in your CSV: {', '.join(missing_cols)}")
+        else:
+            st.success(f"File uploaded! Found {len(df)} rows.")
+            st.dataframe(df.head())
+
+            if st.button(f"Process {len(df)} Addresses"):
+                
+                names, phones, emails, statuses = [], [], [], []
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                for i, row in df.iterrows():
+                    name, phone, email, status = fetch_whitepages_data(
+                        API_KEY, # Pass the secret key to the function
+                        row[street_col],
+                        row[city_col],
+                        row[state_col],
+                        row[zip_col]
+                    )
+                    
+                    names.append(name)
+                    phones.append(phone)
+                    emails.append(email)
+                    statuses.append(status)
+                    
+                    progress_percentage = (i + 1) / len(df)
+                    progress_bar.progress(progress_percentage)
+                    status_text.text(f"Processing row {i+1}/{len(df)}: {row[street_col]}")
+                    
+                    time.sleep(0.1) # Rate Limiting
+
+                status_text.success("Processing Complete!")
+                
+                df_results = df.copy()
+                df_results['Enriched_Name'] = names
+                df_results['Enriched_Phone'] = phones
+                df_results['Enriched_Email'] = emails
+                df_results['Processing_Status'] = statuses
+                
+                st.dataframe(df_results)
+                
+                @st.cache_data
+                def convert_df_to_csv(df_to_convert):
+                    return df_to_convert.to_csv(index=False).encode('utf-8')
+
+                csv_data = convert_df_to_csv(df_results)
+
+                st.download_button(
+                    label="Download Enriched CSV",
+                    data=csv_data,
+                    file_name="enriched_addresses.csv",
+                    mime="text/csv",
+                )
+
+    except Exception as e:
+        st.error("An unexpected error occurred:")
+        st.exception(e)
