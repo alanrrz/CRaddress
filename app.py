@@ -2,65 +2,83 @@ import streamlit as st
 import pandas as pd
 import requests
 import time
+import requests.exceptions # Import the exception
 
-# --- Helper Function to Call the API (UPDATED FOR SECRETS) ---
+# --- Helper Function to Call the API (UPDATED TO MATCH YOUR DOCS) ---
 def fetch_whitepages_data(api_key, street, city, state, zip_code):
     """
-    Fetches data from the Ekata (formerly Whitepages Pro) Identity Check API.
+    Fetches data from the new Whitepages API (api.whitepages.com)
     """
-    API_ENDPOINT = "https://api.ekata.com/1.0/identity_check"
     
+    # 1. --- CORRECTED ENDPOINT (from your docs) ---
+    API_ENDPOINT = "https://api.whitepages.com/v1/person/"
+    
+    # 2. --- CORRECTED PARAMETERS (from your docs) ---
     params = {
-        "primary.address.street_line_1": street,
-        "primary.address.city": city,
-        "primary.address.state_code": state,
-        "primary.address.postal_code": zip_code,
-        "primary.address.country_code": "US"
+        "street": street,
+        "city": city,
+        "state_code": state,
+        "zipcode": zip_code,
     }
     
-    # Use the API key (passed from st.secrets) for authentication
-    auth = (api_key, '') 
+    # 3. --- CORRECTED AUTHENTICATION (from your docs) ---
+    headers = {
+        "X-Api-Key": api_key
+    }
 
     try:
-        response = requests.get(API_ENDPOINT, params=params, auth=auth)
+        # Note: We now pass 'headers=headers' instead of 'auth=...'
+        response = requests.get(API_ENDPOINT, params=params, headers=headers)
         
         if response.status_code == 200:
             data = response.json()
             
-            # --- Safely parse the JSON response ---
-            person = data.get('primary_belongs_to', [{}])[0]
-            if not person: person = {}
-            
-            phone_data = data.get('phones', [{}])[0]
-            if not phone_data: phone_data = {}
+            # 4. --- CORRECTED JSON PARSING (from your docs) ---
+            if data and isinstance(data, list):
+                person = data[0] # Get the first person in the list
+                
+                name = person.get('name', 'Not Found')
+                
+                # Safely get the first phone
+                phone_list = person.get('phones', [])
+                phone = phone_list[0].get('number', 'Not Found') if phone_list else 'Not Found'
 
-            email_data = data.get('emails', [{}])[0]
-            if not email_data: email_data = {}
-            
-            # --- Extract data ---
-            name = person.get('name', 'Not Found')
-            phone = phone_data.get('phone_number', 'Not Found')
-            email = email_data.get('email_address', 'Not Found')
-            
-            return name, phone, email, "Success"
+                # Safely get the first email
+                email_list = person.get('emails', [])
+                email = email_list[0] if email_list else 'Not Found'
+                
+                return name, phone, email, "Success"
+            else:
+                return "Not Found", "Not Found", "Not Found", "Valid address, no person found"
             
         else:
-            # Show a user-friendly error in the app
-            st.error(f"API Error (Row: {street}): {response.status_code} - {response.json().get('error', {}).get('message', 'Unknown Error')}")
-            return "Error", "Error", "Error", response.json().get('error', {}).get('message', 'API Error')
+            # --- SAFER ERROR HANDLING ---
+            error_message = ""
+            error_text = response.text 
+            
+            if not error_text:
+                error_message = f"Empty response from server (Status Code: {response.status_code})."
+            else:
+                try:
+                    # The new docs show error responses ARE JSON
+                    error_message = response.json()
+                except requests.exceptions.JSONDecodeError:
+                    error_message = error_text[:100] + "..." 
+            
+            st.error(f"API Error (Row: {street}): {error_message}")
+            return "Error", "Error", "Error", f"Status {response.status_code}: {error_message}"
 
     except Exception as e:
         st.exception(e)
         return "Exception", "Exception", "Exception", str(e)
 
-# --- Streamlit App UI (UPDATED FOR SECRETS) ---
+# --- Streamlit App UI (No Changes from here down) ---
 
 st.set_page_config(layout="wide")
-st.title("Address Enrichment Tool (Ekata API)")
+st.title("Address Enrichment Tool (Whitepages API)")
 
 st.info("Upload a CSV to enrich it with names, phones, and emails. \n\n**Your CSV must have separate columns for street, city, state, and zip.**")
 
-# --- 1. Get Column Names (API Key is now hidden) ---
 st.subheader("CSV Column Configuration")
 st.warning("Enter the *exact* column names from your CSV file.")
 
@@ -76,15 +94,12 @@ with col4:
 
 uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
 
-# --- 2. Check for API Key in Streamlit Secrets ---
 try:
-    # This will load the API key you add to the Streamlit Cloud dashboard
-    API_KEY = st.secrets["EKATA_API_KEY"]
+    API_KEY = st.secrets["EKATA_API_KEY"] # This name is fine, it just holds the key
 except KeyError:
-    st.error("API Key not found. Please add your EKATA_API_KEY to the Streamlit Cloud secrets.")
-    st.stop() # Stop the app if the key is missing
+    st.error("API Key not found. Please add your API_KEY to the Streamlit Cloud secrets.")
+    st.stop() 
 
-# --- 3. Run the App ---
 if uploaded_file is not None and all([street_col, city_col, state_col, zip_col]):
     
     try:
@@ -105,8 +120,9 @@ if uploaded_file is not None and all([street_col, city_col, state_col, zip_col])
                 status_text = st.empty()
 
                 for i, row in df.iterrows():
+                    # Call the function with the CSV column values
                     name, phone, email, status = fetch_whitepages_data(
-                        API_KEY, # Pass the secret key to the function
+                        API_KEY, 
                         row[street_col],
                         row[city_col],
                         row[state_col],
@@ -122,7 +138,7 @@ if uploaded_file is not None and all([street_col, city_col, state_col, zip_col])
                     progress_bar.progress(progress_percentage)
                     status_text.text(f"Processing row {i+1}/{len(df)}: {row[street_col]}")
                     
-                    time.sleep(0.1) # Rate Limiting
+                    time.sleep(0.1) 
 
                 status_text.success("Processing Complete!")
                 
