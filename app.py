@@ -4,16 +4,15 @@ import requests
 import time
 import requests.exceptions # Import the exception
 
-# --- Helper Function to Call the API (UPDATED TO MATCH YOUR DOCS) ---
+# --- Helper Function to Call the API (UPDATED TO GET ALL MATCHES) ---
 def fetch_whitepages_data(api_key, street, city, state, zip_code):
     """
     Fetches data from the new Whitepages API (api.whitepages.com)
+    and returns ALL matches, not just the first one.
     """
     
-    # 1. --- CORRECTED ENDPOINT (from your docs) ---
     API_ENDPOINT = "https://api.whitepages.com/v1/person/"
     
-    # 2. --- CORRECTED PARAMETERS (from your docs) ---
     params = {
         "street": street,
         "city": city,
@@ -21,34 +20,47 @@ def fetch_whitepages_data(api_key, street, city, state, zip_code):
         "zipcode": zip_code,
     }
     
-    # 3. --- CORRECTED AUTHENTICATION (from your docs) ---
     headers = {
         "X-Api-Key": api_key
     }
 
     try:
-        # Note: We now pass 'headers=headers' instead of 'auth=...'
         response = requests.get(API_ENDPOINT, params=params, headers=headers)
         
         if response.status_code == 200:
             data = response.json()
             
-            # 4. --- CORRECTED JSON PARSING (from your docs) ---
+            # --- THIS IS THE NEW LOGIC ---
             if data and isinstance(data, list):
-                person = data[0] # Get the first person in the list
                 
-                name = person.get('name', 'Not Found')
-                
-                # Safely get the first phone
-                phone_list = person.get('phones', [])
-                phone = phone_list[0].get('number', 'Not Found') if phone_list else 'Not Found'
+                # Create empty lists to hold all matches
+                names_list = []
+                phones_list = []
+                emails_list = []
 
-                # Safely get the first email
-                email_list = person.get('emails', [])
-                email = email_list[0] if email_list else 'Not Found'
+                # Loop through every person returned for this address
+                for person in data:
+                    names_list.append(person.get('name', 'N/A'))
+                    
+                    # Safely get the first phone for this person
+                    phone_list_data = person.get('phones', [])
+                    phone = phone_list_data[0].get('number', 'N/A') if phone_list_data else 'N/A'
+                    phones_list.append(phone)
+
+                    # Safely get the first email for this person
+                    email_list_data = person.get('emails', [])
+                    email = email_list_data[0] if email_list_data else 'N/A'
+                    emails_list.append(email)
+
+                # Join all found items with a " | " separator
+                all_names = " | ".join(names_list)
+                all_phones = " | ".join(phones_list)
+                all_emails = " | ".join(emails_list)
                 
-                return name, phone, email, "Success"
+                return all_names, all_phones, all_emails, f"Success ({len(names_list)} found)"
+            
             else:
+                # This runs if the address is valid but no people are linked
                 return "Not Found", "Not Found", "Not Found", "Valid address, no person found"
             
         else:
@@ -60,7 +72,6 @@ def fetch_whitepages_data(api_key, street, city, state, zip_code):
                 error_message = f"Empty response from server (Status Code: {response.status_code})."
             else:
                 try:
-                    # The new docs show error responses ARE JSON
                     error_message = response.json()
                 except requests.exceptions.JSONDecodeError:
                     error_message = error_text[:100] + "..." 
